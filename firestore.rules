@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && request.auth.token.admin == true;
+    }
+
+    function isRideParticipant(rideId) {
+      let ride = get(/databases/$(database)/documents/rides/$(rideId)).data;
+      return isAuthenticated() && (
+        request.auth.uid == ride.creatorId ||
+        request.auth.uid == ride.driverId
+      );
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    // Ride Collections
+    match /rides/{rideId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && (
+        resource.data.creatorId == request.auth.uid ||
+        resource.data.driverId == request.auth.uid ||
+        request.resource.data.driverId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // Join Requests Collection
+    match /rideRequests/{requestId} {
+      allow read: if isAuthenticated() && (
+        resource.data.passengerId == request.auth.uid ||
+        resource.data.creatorId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && (
+        resource.data.passengerId == request.auth.uid ||
+        resource.data.creatorId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // Notifications Collection
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.recipientId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // Payments Collection
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // SECURE RIDE CHAT SUBCOLLECTIONS
+    // Only assigned driver, ride creator, and confirmed passengers can read/write messages
+    match /rideChats/{rideId}/messages/{messageId} {
+      allow read: if isAuthenticated() && isRideParticipant(rideId);
+      
+      allow create: if isAuthenticated() && 
+        isRideParticipant(rideId) &&
+        request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.rideId == rideId &&
+        request.resource.data.text is string &&
+        request.resource.data.text.size() > 0 &&
+        request.resource.data.text.size() <= 1000;
+        
+      allow update, delete: if false; // Messages are immutable for integrity
+    }
+
+    // COMPLAINTS COLLECTION
+    // Authenticated users can only read their own complaints, or admin can read all
+    match /complaints/{complaintId} {
+      allow read: if isAuthenticated() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Authenticated users can only create complaints where userId matches their UID
+      allow create: if isAuthenticated() && (
+        request.resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+
+      // Users cannot change status, adminResponse, or resolvedAt; only admin can update those fields
+      allow update: if isAdmin() || (
+        isAuthenticated() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.status == resource.data.status &&
+        request.resource.data.adminResponse == resource.data.adminResponse &&
+        request.resource.data.resolvedAt == resource.data.resolvedAt
+      );
+
+      allow delete: if isAdmin();
+    }
+  }
+}
